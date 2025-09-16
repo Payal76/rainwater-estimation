@@ -43,7 +43,7 @@ function App() {
                 <p><strong>Structure Size:</strong> {results.structureSize}</p>
                 <p><strong>Runoff Volume:</strong> {results.runoffVolume} L/year</p>
                 <p><strong>Groundwater Info:</strong> {results.groundwaterInfo.aquifer} aquifer, Recharge Rate: {results.groundwaterInfo.rechargeRate}</p>
-                <p><strong>Estimated Cost:</strong> ₹{results.costEstimate}</p>
+                <p><strong>Estimated Cost:</strong> ₹{results.estimatedCost}</p>
                 <p><strong>Cost-Benefit:</strong> Saves {results.costBenefit.waterSaved} L/year, {results.costBenefit.moneySaved}</p>
               </div>
             ) : (

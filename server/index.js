@@ -1,8 +1,20 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Load rainfall and groundwater datasets
+const rainfallData = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'data', 'rainfallData.json'))
+);
+
+const groundwaterData = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'data', 'groundwaterData.json'))
+);
 
 app.post('/estimate', (req, res) => {
   const {
@@ -19,36 +31,67 @@ app.post('/estimate', (req, res) => {
   const runoffCoefficient = getRunoffCoefficient(roofType);
   const harvestingPotential = rooftopArea * rainfall * runoffCoefficient;
 
-  const feasibility = getFeasibility(harvestingPotential, soilType);
+  const feasibility = getFeasibility(harvestingPotential, rooftopArea, soilType);
   const structure = getStructure(openSpace, hasBorewell);
+  console.log("Structure type:", structure.type);
+  console.log("Structure size:", structure.size);
+
   const runoffVolume = harvestingPotential * 0.9;
-  const rechargeVolume = runoffVolume; // Assuming full recharge
+  const rechargeVolume = runoffVolume;
   const groundwaterInfo = getGroundwaterInfo(location);
-  const costEstimate = getCost(structure.type);
+  const costEstimate = getCost(structure.type, structure.size);
   const costBenefit = getCostBenefit(harvestingPotential);
 
   res.json({
     harvestingPotential: Math.round(harvestingPotential),
-    feasibility,
+    feasibility: feasibility,
     recommendedStructure: structure.type,
     structureSize: structure.size,
     runoffVolume: Math.round(runoffVolume),
     rechargeVolume: Math.round(rechargeVolume),
-    groundwaterInfo,
-    costEstimate,
-    costBenefit
+    groundwaterInfo: groundwaterInfo,
+    estimatedCost: costEstimate,
+    costBenefit: costBenefit,
+    downloadableReport: null
+    
+
   });
 });
 
+// 🔍 Normalize location input
+function normalizeLocation(input) {
+  return input.trim().toLowerCase();
+}
+
+// 🔍 Rainfall lookup
 function getRainfall(location) {
-  const data = {
-    Delhi: 800,
-    Mumbai: 2000,
-    Chennai: 1200,
-    Lucknow: 1000,
-    Khatauli: 950
+  const normalized = normalizeLocation(location);
+  for (const state in rainfallData) {
+    for (const district in rainfallData[state]) {
+      if (district.toLowerCase() === normalized) {
+        return rainfallData[state][district];
+      }
+    }
+  }
+  return 1000;
+}
+
+// 🔍 Groundwater lookup
+function getGroundwaterInfo(location) {
+  const normalized = normalizeLocation(location);
+  for (const state in groundwaterData) {
+    for (const district in groundwaterData[state]) {
+      if (district.toLowerCase() === normalized) {
+        return groundwaterData[state][district];
+      }
+    }
+  }
+  return {
+    aquifer: "Unknown",
+    rechargeRate: "Unknown",
+    depth: "Unknown",
+    status: "Unknown"
   };
-  return data[location] || 1000;
 }
 
 function getRunoffCoefficient(roofType) {
@@ -61,8 +104,9 @@ function getRunoffCoefficient(roofType) {
   return map[roofType] || 0.8;
 }
 
-function getFeasibility(potential, soilType) {
+function getFeasibility(potential, area, soilType) {
   if (soilType === "Clayey") return "Not feasible";
+  if (area < 20) return "Limited feasibility";
   if (potential > 50000) return "Highly feasible";
   if (potential > 20000) return "Feasible with changes";
   return "Not feasible";
@@ -87,33 +131,25 @@ function getStructure(openSpace, hasBorewell) {
   return { type, size };
 }
 
-function getGroundwaterInfo(location) {
-  const data = {
-    Delhi: { aquifer: "Alluvial", rechargeRate: "Moderate" },
-    Mumbai: { aquifer: "Basaltic", rechargeRate: "High" },
-    Chennai: { aquifer: "Coastal Sediment", rechargeRate: "Low" },
-    Lucknow: { aquifer: "Gangetic Alluvium", rechargeRate: "Moderate" },
-    Khatauli: { aquifer: "Doab Alluvium", rechargeRate: "Moderate" }
-  };
-  return data[location] || { aquifer: "Unknown", rechargeRate: "Unknown" };
-}
-
-function getCost(type) {
+function getCost(type, size) {
+  if (!type || typeof type !== "string") return 0;
   const baseCosts = {
     "Recharge Pit": 15000,
     "Recharge Trench": 20000,
     "Recharge Shaft": 18000
   };
-  const cleanType = type.replace(" (near borewell)", "");
+  const cleanType = type.replace(" (near borewell)", "").trim();
   return baseCosts[cleanType] || 16000;
 }
 
 function getCostBenefit(potential) {
   const waterSaved = potential * 0.75;
   const moneySaved = Math.round(waterSaved / 1000 * 25);
+  const subsidy = Math.round(moneySaved * 0.2);
   return {
     waterSaved: Math.round(waterSaved),
-    moneySaved: `₹${moneySaved} per year`
+    moneySaved: `₹${moneySaved} per year`,
+    subsidyUsed: `₹${subsidy} approx`
   };
 }
 
