@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import PropertyForm from './components/PropertyForm';
+import PropertyForm from './components/InputForm';
 import './index.css'; // Make sure this is imported for custom CSS
 
 function App() {

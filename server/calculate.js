@@ -106,8 +106,8 @@ function getRunoffCoefficient(roofType) {
 
 function getFeasibility(potential, area, soilType) {
   if (soilType === "Clayey") return "Not feasible";
-  if (area < 20) return "Limited feasibility";
-  if (potential > 50000) return "Highly feasible";
+  if (area < 20) return "Low feasibility";
+  if (potential > 50000) return "High feasiblity";
   if (potential > 20000) return "Feasible with changes";
   return "Not feasible";
 }
