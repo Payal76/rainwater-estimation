@@ -7,14 +7,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Load rainfall and groundwater datasets
-const rainfallData = JSON.parse(
-  fs.readFileSync(path.join(__dirname, 'data', 'rainfallData.json'))
-);
-
-const groundwaterData = JSON.parse(
-  fs.readFileSync(path.join(__dirname, 'data', 'groundwaterData.json'))
-);
+// Load datasets
+const rainfallData = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'rainfallData.json')));
+const groundwaterData = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'groundwaterData.json')));
+const districtCosts = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'districtCosts.json')));
 
 app.post('/estimate', (req, res) => {
   const {
@@ -27,61 +23,64 @@ app.post('/estimate', (req, res) => {
     soilType
   } = req.body;
 
-  const rainfall = getRainfall(location);
+  const normalizedLocation = normalizeLocation(location);
+  const rainfall = getRainfall(normalizedLocation);
   const runoffCoefficient = getRunoffCoefficient(roofType);
   const harvestingPotential = rooftopArea * rainfall * runoffCoefficient;
 
-  const feasibility = getFeasibility(harvestingPotential, rooftopArea, soilType);
-  const structure = getStructure(openSpace, hasBorewell);
-  console.log("Structure type:", structure.type);
-  console.log("Structure size:", structure.size);
+  const feasibility = getFeasibility({
+    soilType,
+    openArea: openSpace,
+    rainfall,
+    hasBorewell,
+    roofArea: rooftopArea
+  });
 
+  const structure = getStructure(openSpace, hasBorewell);
   const runoffVolume = harvestingPotential * 0.9;
   const rechargeVolume = runoffVolume;
-  const groundwaterInfo = getGroundwaterInfo(location);
-  const costEstimate = getCost(structure.type, structure.size);
+  const groundwaterInfo = getGroundwaterInfo(normalizedLocation);
+  const costEstimate = getStructureCost(location, structure.type);
   const costBenefit = getCostBenefit(harvestingPotential);
 
   res.json({
     harvestingPotential: Math.round(harvestingPotential),
-    feasibility: feasibility,
+    feasibility,
     recommendedStructure: structure.type,
     structureSize: structure.size,
     runoffVolume: Math.round(runoffVolume),
     rechargeVolume: Math.round(rechargeVolume),
-    groundwaterInfo: groundwaterInfo,
+    groundwaterInfo,
     estimatedCost: costEstimate,
-    costBenefit: costBenefit,
+    costBenefit,
     downloadableReport: null
-    
-
   });
 });
 
 // 🔍 Normalize location input
 function normalizeLocation(input) {
-  return input.trim().toLowerCase();
+  return (input || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, ''); // removes digits, commas, symbols, spaces
 }
-
 // 🔍 Rainfall lookup
 function getRainfall(location) {
-  const normalized = normalizeLocation(location);
   for (const state in rainfallData) {
     for (const district in rainfallData[state]) {
-      if (district.toLowerCase() === normalized) {
+      if (normalizeLocation(district) === location) {
         return rainfallData[state][district];
       }
     }
   }
-  return 1000;
+  return 1000; // fallback
 }
 
 // 🔍 Groundwater lookup
 function getGroundwaterInfo(location) {
-  const normalized = normalizeLocation(location);
   for (const state in groundwaterData) {
     for (const district in groundwaterData[state]) {
-      if (district.toLowerCase() === normalized) {
+      if (normalizeLocation(district) === location) {
         return groundwaterData[state][district];
       }
     }
@@ -104,42 +103,119 @@ function getRunoffCoefficient(roofType) {
   return map[roofType] || 0.8;
 }
 
-function getFeasibility(potential, area, soilType) {
-  if (soilType === "Clayey") return "Not feasible";
-  if (area < 20) return "Low feasibility";
-  if (potential > 50000) return "High feasiblity";
-  if (potential > 20000) return "Feasible with changes";
-  return "Not feasible";
+// ✅ Feasibility logic
+function getFeasibility({ soilType, openArea, rainfall, hasBorewell, roofArea }) {
+  const normalizedSoil = normalizeLocation(soilType);
+  const safeRainfall = Number(rainfall) || 600;
+  const safeOpenArea = Number(openArea) || 0;
+  const safeRoofArea = Number(roofArea) || 0;
+  const borewellPresent = hasBorewell === "Yes";
+
+  if (safeRoofArea < 10 && safeOpenArea < 10) return "Not feasible";
+  if (safeRainfall < 400) return "Not feasible";
+
+  if (normalizedSoil === "clayey") {
+    if (safeOpenArea >= 30 && safeRainfall >= 800) {
+      return borewellPresent ? "Feasible with recharge pit near borewell" : "Feasible with trench";
+    }
+    if (safeOpenArea >= 15 && safeRainfall >= 600) {
+      return borewellPresent ? "Feasible with recharge shaft" : "Feasible with conditions";
+    }
+    return "Not feasible";
+  }
+
+  if (normalizedSoil === "loamy") {
+    if (safeOpenArea >= 50 && safeRainfall >= 1000) return "Highly feasible";
+    if (safeOpenArea >= 20 && safeRainfall >= 700) return "Feasible";
+    return borewellPresent ? "Feasible with recharge shaft" : "Feasible with conditions";
+  }
+
+  if (normalizedSoil === "sandy") {
+    if (safeOpenArea >= 40 && safeRainfall >= 900) return "Highly feasible";
+    if (safeOpenArea >= 20 && safeRainfall >= 700) return "Feasible";
+    return borewellPresent ? "Feasible with recharge shaft" : "Feasible with conditions";
+  }
+
+  if (normalizedSoil === "mixed") {
+    if (safeOpenArea >= 30 && safeRainfall >= 900) return "Feasible";
+    if (safeOpenArea >= 15 && safeRainfall >= 700) {
+      return borewellPresent ? "Feasible with recharge pit" : "Feasible with conditions";
+    }
+    return "Feasible with conditions";
+  }
+
+  return "Feasible with conditions";
 }
 
 function getStructure(openSpace, hasBorewell) {
+  const area = Number(openSpace) || 0;
   let type = "Recharge Shaft";
   let size = "1m × 1m × 3m";
 
-  if (openSpace > 50) {
+  if (area >= 50) {
     type = "Recharge Pit";
     size = "2m × 2m × 2m";
-  } else if (openSpace > 20) {
+  } else if (area >= 20) {
     type = "Recharge Trench";
     size = "5m × 1m × 1.5m";
+  } else if (area >= 5) {
+    type = "Recharge Shaft";
+    size = "1m × 1m × 3m";
+  } else {
+    type = "Not enough space";
+    size = "N/A";
   }
 
-  if (hasBorewell === "Yes") {
+  if (hasBorewell === "Yes" && type !== "Not enough space") {
     type += " (near borewell)";
   }
 
   return { type, size };
 }
 
-function getCost(type, size) {
-  if (!type || typeof type !== "string") return 0;
-  const baseCosts = {
-    "Recharge Pit": 15000,
-    "Recharge Trench": 20000,
-    "Recharge Shaft": 18000
-  };
-  const cleanType = type.replace(" (near borewell)", "").trim();
-  return baseCosts[cleanType] || 16000;
+// ✅ New cost logic using districtCosts.json
+function getStructureCost(location, structureType) {
+  const cleanType = structureType.replace(" (near borewell)", "").trim();
+  const normalizedInput = normalizeLocation(location);
+
+  // Try district-level match
+  for (const state in districtCosts) {
+    for (const district in districtCosts[state]) {
+      const normalizedDistrict = normalizeLocation(district);
+      if (
+        normalizedInput === normalizedDistrict ||
+        normalizedInput.includes(normalizedDistrict) ||
+        normalizedDistrict.includes(normalizedInput)
+      ) {
+        const cost = districtCosts[state][district][cleanType];
+        console.log(`✅ District match: ${district}, ${cleanType} → ₹${cost}`);
+        return cost || 0;
+      }
+    }
+  }
+
+  // Fallback: match state name
+  for (const state in costModifiers) {
+    const normalizedState = normalizeLocation(state);
+    if (
+      normalizedInput === normalizedState ||
+      normalizedInput.includes(normalizedState) ||
+      normalizedState.includes(normalizedInput)
+    ) {
+      const modifier = costModifiers[state] || 1.0;
+      const baseCosts = {
+        "Recharge Pit": 15000,
+        "Recharge Trench": 20000,
+        "Recharge Shaft": 18000
+      };
+      const fallbackCost = Math.round((baseCosts[cleanType] || 16000) * modifier);
+      console.log(`⚠️ Fallback to state: ${state}, ${cleanType} → ₹${fallbackCost}`);
+      return fallbackCost;
+    }
+  }
+
+  console.warn(`❌ No match for: ${location}, structure: ${cleanType}`);
+  return 0;
 }
 
 function getCostBenefit(potential) {
